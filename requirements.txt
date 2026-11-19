@@ -1,0 +1,5 @@
+rich>=13.0.0
+pymysql>=1.0.0
+scapy>=2.5.0
+paramiko>=3.0.0
+pysnmp<6.0.0
