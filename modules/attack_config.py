@@ -319,6 +319,21 @@ def _cfg_http_bruteforce():
     )
 
 
+def _cfg_dir_map():
+    console.print("\n[bold primary][ SERVER DIRECTORY MAPPING CONFIG ][/bold primary]\n")
+    tls = render_menu("SCHEME", ["Plain HTTP", "HTTPS"]) == 1
+    path = ask_input("Base path to map", "/")
+    wordlist = ask_input("Custom wordlist path (blank = default high-priority list)", "")
+    log = ask_input("Save findings to file (blank = skip)", "")
+    return AttackConfig(
+        attack_type=AttackType.DIR_MAP,
+        http_use_tls=tls,
+        http_path=path,
+        password_file=wordlist or None,
+        log_file=log or None,
+    )
+
+
 def _cfg_http_scanner():
     console.print("\n[bold primary][ HTTP SCANNER CONFIG ][/bold primary]\n")
     tls = render_menu("SCHEME", ["Plain HTTP", "HTTPS"]) == 1
@@ -451,6 +466,7 @@ _DISPATCH = {
     AttackType.SSH_SCANNER:     _cfg_ssh_scanner,
     AttackType.AUTO_PWN:        _cfg_auto_pwn,
     AttackType.FULL_AUTO:       _cfg_full_auto,
+    AttackType.DIR_MAP:         _cfg_dir_map,
 }
 _DISPATCH.update({
     AttackType.WEB_SHELL_UPLOAD:      _cfg_web_shell_upload,

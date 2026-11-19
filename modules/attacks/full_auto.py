@@ -182,7 +182,27 @@ def run(target: TargetInfo, config: AttackConfig) -> None:
 
         cfg = _auto_config(atk, target, config, creds, log)
         try:
-            DISPATCH[atk](target, cfg)
+            # Run attack with a 90s watchdog timeout so a hung network socket never stalls Full Auto
+            import threading
+            err_box = []
+
+            def _runner():
+                try:
+                    DISPATCH[atk](target, cfg)
+                except BaseException as e:
+                    err_box.append(e)
+
+            th = threading.Thread(target=_runner, daemon=True)
+            th.start()
+            th.join(timeout=90.0)
+            if th.is_alive():
+                console.print(f"  [bold warning]⚠ Attack '{label}' reached 90s timeout — advancing to next attack[/bold warning]")
+            elif err_box:
+                exc = err_box[0]
+                if isinstance(exc, KeyboardInterrupt):
+                    console.print("[warning]  Ctrl+C — skipping to next attack[/warning]")
+                else:
+                    console.print(f"[warning]  Error: {escape(str(exc))}[/warning]")
         except KeyboardInterrupt:
             console.print("[warning]  Ctrl+C — skipping to next attack[/warning]")
         except (RuntimeError, ValueError) as exc:

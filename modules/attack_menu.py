@@ -26,6 +26,7 @@ class AttackType(enum.Enum):
     SSH_SCANNER     = "ssh_scanner"
     AUTO_PWN        = "auto_pwn"
     FULL_AUTO       = "full_auto"
+    DIR_MAP         = "dir_map"
 
     # ---- 30 new advanced attacks ----
     WEB_SHELL_UPLOAD       = "web_shell_upload"
@@ -74,6 +75,17 @@ class AttackType(enum.Enum):
     TELNET_BRUTE    = "telnet_brute"
 
 
+def _attack_sort_key(atk: AttackType) -> int:
+    """Ensure top order: 1) FULL_AUTO, 2) VULN_SCAN, 3) DIR_MAP, followed by others."""
+    if atk == AttackType.FULL_AUTO:
+        return 0
+    if atk == AttackType.VULN_SCAN:
+        return 1
+    if atk == AttackType.DIR_MAP:
+        return 2
+    return 3
+
+
 def run_attack_menu(targets: list[TargetInfo]) -> tuple[TargetInfo, "AttackType"]:
     from modules.attack_registry import get_attacks, ATTACK_LABELS
     entries: list[tuple[TargetInfo, AttackType]] = []
@@ -82,8 +94,8 @@ def run_attack_menu(targets: list[TargetInfo]) -> tuple[TargetInfo, "AttackType"
             entries.append((t, atk))
     if not entries:
         raise RuntimeError("No applicable attacks for detected services.")
-    # Prioritize FULL_AUTO at the top of the menu
-    entries.sort(key=lambda item: 0 if item[1] == AttackType.FULL_AUTO else 1)
+    # Prioritize: 1. FULL_AUTO, 2. VULN_SCAN, 3. DIR_MAP
+    entries.sort(key=lambda item: _attack_sort_key(item[1]))
     options = [f"[{t.service.upper()}:{t.port}]  {ATTACK_LABELS[atk]}" for t, atk in entries]
     idx = render_menu("SELECT ATTACK", options)
     return entries[idx]
@@ -98,10 +110,8 @@ def run_attack_menu_all(targets: list[TargetInfo]) -> tuple[list[TargetInfo], "A
                 all_types.append(a)
     if not all_types:
         raise RuntimeError("No applicable attacks.")
-    # Prioritize FULL_AUTO at the top of the menu
-    if AttackType.FULL_AUTO in all_types:
-        all_types.remove(AttackType.FULL_AUTO)
-        all_types.insert(0, AttackType.FULL_AUTO)
+    # Prioritize: 1. FULL_AUTO, 2. VULN_SCAN, 3. DIR_MAP
+    all_types.sort(key=_attack_sort_key)
     labels = [ATTACK_LABELS[a] for a in all_types]
     idx = render_menu("SELECT ATTACK (runs on all compatible targets)", labels)
     chosen = all_types[idx]

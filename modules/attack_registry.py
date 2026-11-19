@@ -48,6 +48,7 @@ SERVICE_ATTACKS: dict[str, list[AttackType]] = {
     # ------------------------------------------------------------------ MySQL
     "mysql": [
         AttackType.FULL_AUTO,
+        AttackType.VULN_SCAN,
         AttackType.BRUTEFORCE,
         AttackType.DICTIONARY,
         AttackType.WORDLIST,
@@ -56,7 +57,6 @@ SERVICE_ATTACKS: dict[str, list[AttackType]] = {
         AttackType.MYSQL_AUTH_BYPASS,
         AttackType.MYSQL_UDF,
         AttackType.MYSQL_BACKDOOR,
-        AttackType.VULN_SCAN,
         AttackType.CRED_SNIFFER,
         AttackType.AUTO_PWN,
     ],
@@ -64,6 +64,7 @@ SERVICE_ATTACKS: dict[str, list[AttackType]] = {
     # -------------------------------------------------------------------- FTP
     "ftp": [
         AttackType.FULL_AUTO,
+        AttackType.VULN_SCAN,
         AttackType.BRUTEFORCE,
         AttackType.DICTIONARY,
         AttackType.WORDLIST,
@@ -72,7 +73,6 @@ SERVICE_ATTACKS: dict[str, list[AttackType]] = {
         AttackType.FTP_PROFTPD_MODCOPY,
         AttackType.FTP_VSFTPD_BACKDOOR,
         AttackType.FTP_WEBSHELL,
-        AttackType.VULN_SCAN,
         AttackType.CRED_SNIFFER,
         AttackType.AUTO_PWN,
     ],
@@ -80,12 +80,13 @@ SERVICE_ATTACKS: dict[str, list[AttackType]] = {
     # ------------------------------------------------------------------- HTTP
     "http": [
         AttackType.FULL_AUTO,
+        AttackType.VULN_SCAN,
+        AttackType.DIR_MAP,
         AttackType.HTTP_BRUTEFORCE,
         AttackType.HTTP_SCANNER,
         AttackType.WEB_SHELL_UPLOAD,
         AttackType.EXPLOIT_UPLOAD,
         *WEB_COMMON,
-        AttackType.VULN_SCAN,
         AttackType.CRED_SNIFFER,
         AttackType.AUTO_PWN,
     ],
@@ -93,6 +94,8 @@ SERVICE_ATTACKS: dict[str, list[AttackType]] = {
     # ------------------------------------------------------------------ HTTPS
     "https": [
         AttackType.FULL_AUTO,
+        AttackType.VULN_SCAN,
+        AttackType.DIR_MAP,
         AttackType.HTTP_BRUTEFORCE,
         AttackType.SSL_SCAN,
         AttackType.WEB_SHELL_UPLOAD,
@@ -105,102 +108,102 @@ SERVICE_ATTACKS: dict[str, list[AttackType]] = {
     # ------------------------------------------------------------------- SMTP
     "smtp": [
         AttackType.FULL_AUTO,
+        AttackType.VULN_SCAN,
         AttackType.SMTP_ENUM,
         AttackType.SMTP_BRUTEFORCE,
         AttackType.SMTP_RELAY,
         AttackType.SMTP_SPOOF_CHAIN,
         AttackType.SMTP_HEADER_INJECTION,
-        AttackType.VULN_SCAN,
         AttackType.AUTO_PWN,
     ],
 
     # -------------------------------------------------------------------- SSH
     "ssh": [
         AttackType.FULL_AUTO,
+        AttackType.VULN_SCAN,
         AttackType.SSH_BRUTEFORCE,
         AttackType.SSH_SCANNER,
         AttackType.SSH_USER_ENUM,
         AttackType.SSH_KEY_BACKDOOR,
-        AttackType.VULN_SCAN,
         AttackType.AUTO_PWN,
     ],
 
     # ------------------------------------------------------------------ Redis
     "redis": [
         AttackType.FULL_AUTO,
+        AttackType.VULN_SCAN,
         AttackType.REDIS_SCAN,
         AttackType.REDIS_RCE,
-        AttackType.VULN_SCAN,
     ],
 
     # --------------------------------------------------------------- MongoDB
     "mongodb": [
         AttackType.FULL_AUTO,
-        AttackType.MONGO_ENUM,
         AttackType.VULN_SCAN,
+        AttackType.MONGO_ENUM,
     ],
 
     # ------------------------------------------------------------ PostgreSQL
     "postgres": [
         AttackType.FULL_AUTO,
-        AttackType.POSTGRES_SCAN,
         AttackType.VULN_SCAN,
+        AttackType.POSTGRES_SCAN,
     ],
 
     # ----------------------------------------------------------------- MSSQL
     "mssql": [
         AttackType.FULL_AUTO,
-        AttackType.MSSQL_SCAN,
         AttackType.VULN_SCAN,
+        AttackType.MSSQL_SCAN,
     ],
 
     # ------------------------------------------------------- Elasticsearch
     "elasticsearch": [
         AttackType.FULL_AUTO,
-        AttackType.ELASTIC_DUMP,
         AttackType.VULN_SCAN,
+        AttackType.ELASTIC_DUMP,
     ],
 
     # ------------------------------------------------------------ Memcached
     "memcached": [
         AttackType.FULL_AUTO,
-        AttackType.MEMCACHED_DUMP,
         AttackType.VULN_SCAN,
+        AttackType.MEMCACHED_DUMP,
     ],
 
     # -------------------------------------------------------------------VNC
     "vnc": [
         AttackType.FULL_AUTO,
-        AttackType.VNC_SCAN,
         AttackType.VULN_SCAN,
+        AttackType.VNC_SCAN,
     ],
 
     # ---------------------------------------------------------------- Telnet
     "telnet": [
         AttackType.FULL_AUTO,
-        AttackType.TELNET_BRUTE,
         AttackType.VULN_SCAN,
+        AttackType.TELNET_BRUTE,
     ],
 
     # ------------------------------------------------------------------ LDAP
     "ldap": [
         AttackType.FULL_AUTO,
-        AttackType.LDAP_ENUM,
         AttackType.VULN_SCAN,
+        AttackType.LDAP_ENUM,
     ],
 
     # ---------------------------------------------------------------- Docker
     "docker": [
         AttackType.FULL_AUTO,
-        AttackType.DOCKER_ESCAPE,
         AttackType.VULN_SCAN,
+        AttackType.DOCKER_ESCAPE,
     ],
 
     # ------------------------------------------------------------- Kubernetes
     "kubernetes": [
         AttackType.FULL_AUTO,
-        AttackType.KUBE_SECRETS,
         AttackType.VULN_SCAN,
+        AttackType.KUBE_SECRETS,
     ],
 }
 
@@ -232,6 +235,7 @@ ATTACK_LABELS: dict[AttackType, str] = {
     AttackType.SSH_SCANNER:     "SSH Weak-Config / Auth Method Scan",
     AttackType.AUTO_PWN:        "AUTO PWN (scan → defaults → dictionary → enum)",
     AttackType.FULL_AUTO:       "★ FULL AUTO (run every applicable attack, no brute)",
+    AttackType.DIR_MAP:         "Server Directory Mapping (site structure, endpoints & files)",
 
     # ---------------- Advanced web attacks (20) ----------------
     AttackType.WEB_SHELL_UPLOAD:      "Web Shell Upload (multipart bypass + polyglot)",
@@ -320,11 +324,21 @@ def attacks_for_targets(targets: list) -> list[tuple]:
     Given a list of TargetInfo objects, return (target, attack) pairs
     in the order they should appear in the menu.
     """
+    def _key(item):
+        atk = item[1]
+        if atk == AttackType.FULL_AUTO:
+            return 0
+        if atk == AttackType.VULN_SCAN:
+            return 1
+        if atk == AttackType.DIR_MAP:
+            return 2
+        return 3
+
     pairs: list[tuple] = []
     for t in targets:
         for atk in get_attacks(t.service):
             pairs.append((t, atk))
-    pairs.sort(key=lambda item: 0 if item[1] == AttackType.FULL_AUTO else 1)
+    pairs.sort(key=_key)
     return pairs
 
 

@@ -979,12 +979,33 @@ def run(target: TargetInfo, config: AttackConfig) -> None:
     tls  = svc == "https"
     is_web = svc in ("http", "https")
 
+    # If FTP version was Unknown from initial quick ping, actively query FTP banner
+    if svc == "ftp" and (not target.version or target.version.lower() == "unknown"):
+        try:
+            from modules.ftp_detect import detect_ftp_version
+            ftp_res = detect_ftp_version(target.host, target.port, timeout=6)
+            if ftp_res.get("version") and ftp_res.get("version") != "Unknown":
+                target.version = ftp_res["version"]
+                if not getattr(target, "extra", None):
+                    target.extra = {}
+                target.extra["software"] = ftp_res.get("product", "Unknown")
+                target.extra["banner"] = ftp_res.get("banner", "")
+        except Exception:
+            pass
+
+    phases_desc = "CVE DB & Version Mapping"
+    if is_web:
+        phases_desc += " → Active HTTP Probes"
+        if tls:
+            phases_desc += " → TLS/SSL Audit"
+    elif svc == "ftp":
+        phases_desc += " → Anonymous Login Check"
+
     console.print(
         f"\n[bold primary][ DEEP VULNERABILITY SCANNER ][/bold primary]\n"
         f"  [muted]Target  :[/muted] [primary]{svc.upper()} {target.host}:{target.port}[/primary]\n"
         f"  [muted]Version :[/muted] [text]{target.version or 'unknown'}[/text]\n"
-        f"  [muted]Phases  :[/muted] [text]CVE DB → Active HTTP Probes"
-        f"{' → TLS Audit' if is_web else ''}[/text]\n"
+        f"  [muted]Phases  :[/muted] [text]{phases_desc}[/text]\n"
     )
 
     findings: list[dict] = []

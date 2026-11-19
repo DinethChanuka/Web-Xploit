@@ -281,6 +281,30 @@ def probe_ftp(host: str, port: int) -> dict:
     import ftplib
     info: dict = {}
     try:
+        try:
+            from modules.ftp_detect import detect_ftp_version
+            f_res = detect_ftp_version(host, port, timeout=int(PROBE_TIMEOUT))
+            if f_res.get("raw_ok") or (f_res.get("banner") and f_res.get("version") != "Unknown"):
+                info["banner"] = f_res.get("banner", "")
+                info["reachable"] = True
+                info["version"] = f_res.get("version", "Unknown")
+                info["software"] = f_res.get("product", "Unknown")
+                # Test anonymous login
+                try:
+                    ftp = ftplib.FTP()
+                    ftp.connect(host, port, timeout=int(PROBE_TIMEOUT))
+                    ftp.login("anonymous", "test@test.com")
+                    info["anonymous_login"] = True
+                    try:
+                        ftp.quit()
+                    except Exception:
+                        ftp.close()
+                except Exception:
+                    info["anonymous_login"] = False
+                return info
+        except Exception:
+            pass
+
         with socket.create_connection((host, port), timeout=PROBE_TIMEOUT) as sock:
             sock.settimeout(PROBE_TIMEOUT)
             data = sock.recv(1024)

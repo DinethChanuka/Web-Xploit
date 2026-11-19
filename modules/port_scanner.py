@@ -75,7 +75,20 @@ def _probe_mysql(host, port):
 
 
 def _probe_ftp(host, port):
-    data = _grab(host, port)
+    try:
+        from modules.ftp_detect import detect_ftp_version
+        res = detect_ftp_version(host, port, timeout=6)
+        if res.get("raw_ok") or (res.get("banner") and res.get("version") != "Unknown"):
+            return {
+                "banner": res.get("banner", ""),
+                "software": res.get("product", "Unknown"),
+                "version": res.get("version", "Unknown"),
+            }
+    except Exception:
+        pass
+
+    # Fallback to direct raw socket read with 6.0s timeout
+    data = _grab(host, port, timeout=6.0)
     banner = data.decode("utf-8", errors="replace").strip() if data else ""
     info = {"banner": banner, "software": "Unknown", "version": "Unknown"}
     m = re.search(r"(\d+\.\d+[\.\d]*)", banner)
