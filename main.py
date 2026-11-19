@@ -1,5 +1,7 @@
 import os
 import signal
+import socket
+import ipaddress
 
 from Design.colors_cli import console
 from Design.header import render_header
@@ -9,13 +11,14 @@ from modules.port_scanner import scan_target, render_scan_summary, SERVICE_PORTS
 from modules.attack_menu import run_attack_menu, run_attack_menu_all, AttackType
 from modules.attack_config import run_attack_config
 from modules.downloads import init_downloads
+from modules.origin_ip import is_cdn_ip, resolve_origin_ips
 from modules.attacks import (
     bruteforce, dictionary, wordlist,
     config_enum, mysql_exploit, vuln_scan,
     cred_sniffer, ftp_anon, ftp_bounce,
     http_bruteforce, http_scanner, exploit_upload, ssl_scan,
     smtp_enum, smtp_bruteforce, smtp_relay,
-    ssh_bruteforce, ssh_scanner, auto_pwn, full_auto,
+    ssh_bruteforce, ssh_scanner, auto_pwn, full_auto, dir_map,
 )
 from modules.attacks.mysql_advanced import (
     run_mysql_udf, run_mysql_auth_bypass, run_mysql_backdoor,
@@ -69,6 +72,7 @@ DISPATCH = {
     AttackType.SSH_SCANNER:     ssh_scanner.run,
     AttackType.AUTO_PWN:        auto_pwn.run,
     AttackType.FULL_AUTO:       full_auto.run,
+    AttackType.DIR_MAP:         dir_map.run,
 
     # ── Advanced MySQL ───────────────────────────────────────────────────────
     AttackType.MYSQL_UDF:          run_mysql_udf,
@@ -157,6 +161,14 @@ def _choose_scan_services() -> list[str]:
     return valid or list(SERVICE_PORTS.keys())
 
 
+def _is_ip(s: str) -> bool:
+    try:
+        ipaddress.ip_address(s)
+        return True
+    except ValueError:
+        return False
+
+
 def main():
     setup_signals()
     os.system("cls" if os.name == "nt" else "clear")
@@ -174,6 +186,45 @@ def main():
             if not host or host.lower() in ("q", "quit", "exit"):
                 console.print("\n[muted]Exiting. Goodbye![/muted]\n")
                 break
+
+            # If domain entered, check if behind CDN and offer origin IP discovery
+            if not _is_ip(host) and host.lower() not in ("localhost", "127.0.0.1"):
+                try:
+                    resolved_ips = [info[4][0] for info in socket.getaddrinfo(host, None)]
+                    if any(is_cdn_ip(ip) for ip in resolved_ips):
+                        console.print(
+                            f"\n[bold warning]⚠ Notice: '{host}' is behind a CDN / Cloudflare Proxy "
+                            f"({', '.join(resolved_ips[:3])})[/bold warning]"
+                        )
+                        console.print(
+                            "  [muted]Directly scanning CDN IPs blocks non-HTTP services (FTP, MySQL, SSH).\n"
+                            "  Origin resolution bypasses the CDN to find the real backend server IP.[/muted]\n"
+                        )
+                        resolve_opt = render_menu(
+                            "CDN BYPASS / ORIGIN RESOLUTION",
+                            [
+                                "Search for real backend Origin IP (Recommended)",
+                                f"Continue with CDN hostname ({host})",
+                            ],
+                            allow_back=False,
+                        )
+                        if resolve_opt == 0:
+                            candidates = resolve_origin_ips(host, verbose=True)
+                            if candidates:
+                                opts = [
+                                    f"Use Origin IP {c['ip']} ({'✓ Verified origin' if c['verified'] else 'Candidate'} via {c['source']})"
+                                    for c in candidates
+                                ]
+                                opts.append(f"Keep original target ({host})")
+                                pick = render_menu("SELECT TARGET IP", opts, allow_back=False)
+                                if pick < len(candidates):
+                                    chosen = candidates[pick]["ip"]
+                                    console.print(f"\n  [bold success]✓ Switched target to Origin IP: {chosen}[/bold success]\n")
+                                    host = chosen
+                            else:
+                                console.print("\n  [muted]No origin IP confirmed. Proceeding with hostname.[/muted]\n")
+                except Exception as e:
+                    console.print(f"  [dim]CDN check note: {e}[/dim]")
 
             targets = None
             while True:

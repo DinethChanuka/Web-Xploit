@@ -136,21 +136,21 @@ def _bypass_headers() -> list[dict]:
 
 # ---------- HTTP helpers ----------
 
-def _conn(host, port, tls):
+def _conn(host, port, tls, timeout=3.5):
     if tls:
         ctx = ssl.create_default_context()
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
-        return http.client.HTTPSConnection(host, port, timeout=8, context=ctx)
-    return http.client.HTTPConnection(host, port, timeout=8)
+        return http.client.HTTPSConnection(host, port, timeout=timeout, context=ctx)
+    return http.client.HTTPConnection(host, port, timeout=timeout)
 
 
-def _request(host, port, tls, path, method="GET", headers=None, body=None):
+def _request(host, port, tls, path, method="GET", headers=None, body=None, timeout=3.5):
     try:
-        c = _conn(host, port, tls)
+        c = _conn(host, port, tls, timeout=timeout)
         c.request(method, path, headers=headers or {"User-Agent": "Mozilla/5.0"})
         r = c.getresponse()
-        data = r.read()
+        data = r.read(16384)
         result = {
             "status": r.status,
             "headers": dict(r.getheaders()),
@@ -302,74 +302,89 @@ def _parse_robots(host, port, tls, base):
 
 
 def _try_path(host, port, tls, base, relpath, log_handle, host_label):
-    """Probe one path with bypass variants and headers. Returns True if found."""
+    """Probe one path. Fast baseline first, only attempts bypass on 401/403."""
     full_path = base.rstrip("/") + "/" + relpath.lstrip("/")
-    found_any = False
 
-    for variant in _bypass_variants(full_path):
-        for headers in _bypass_headers():
-            resp = _request(host, port, tls, variant, headers=headers)
-            if not resp:
-                continue
-            if resp["status"] in (200, 201, 204, 206, 301, 302, 401, 403):
-                # 200/206 = real content; 401/403 = exists but gated
-                if resp["status"] in (200, 206) or \
-                   (resp["status"] in (401, 403) and variant == full_path):
+    # 1. Fast baseline request
+    resp = _request(host, port, tls, full_path, timeout=3.5)
+    if not resp:
+        return False
+
+    st = resp["status"]
+    if st in (200, 201, 204, 206, 301, 302):
+        loc = f" → {resp['headers'].get('Location', '')}" if resp.get('headers', {}).get('Location') else ""
+        console.print(
+            f"  [bold success]✓ {st:>3}[/bold success]  "
+            f"[text]{full_path}[/text]  "
+            f"[muted]({resp['size']}b){loc}[/muted]"
+        )
+        if log_handle:
+            log_handle.write(f"[DIR] {st} {full_path} {resp['size']}b\n")
+        _auto_download(host_label, "dirbust", full_path, resp)
+        return True
+
+    elif st in (401, 403):
+        console.print(
+            f"  [bold yellow]! {st:>3}[/bold yellow]  "
+            f"[text]{full_path}[/text]  "
+            f"[dim](gated — testing top bypasses...)[/dim]"
+        )
+        if log_handle:
+            log_handle.write(f"[DIR] {st} {full_path} (protected)\n")
+
+        # Targeted bypasses only on actual protected endpoints
+        clean = relpath.lstrip("/")
+        quick_variants = [f"//{clean}", f"/{clean}/.", f"/%2e/{clean}"]
+        quick_headers = [
+            {"X-Forwarded-For": "127.0.0.1"},
+            {"X-Original-URL": full_path},
+            {"X-Custom-IP-Authorization": "127.0.0.1"},
+        ]
+        for v in quick_variants:
+            for h in quick_headers:
+                b_resp = _request(host, port, tls, v, headers=h, timeout=3.0)
+                if b_resp and b_resp["status"] in (200, 206):
                     console.print(
-                        f"  [success]✓ {resp['status']:>3}[/success]  "
-                        f"[text]{variant}[/text]  "
-                        f"[muted]({resp['size']}b)[/muted]"
+                        f"  [bold success]✓ BYPASS {b_resp['status']}[/bold success]  "
+                        f"[text]{v}[/text]  "
+                        f"[muted]({b_resp['size']}b)[/muted]"
                     )
                     if log_handle:
-                        log_handle.write(f"[DIR] {resp['status']} {variant} {resp['size']}b\n")
-                    _auto_download(host_label, "dirbust", variant, resp)
-                    found_any = True
-                    break   # don't try all headers for this variant
-            # fall through
-        if found_any:
-            break   # don't try all variants if we found it
-    return found_any
+                        log_handle.write(f"[DIR_BYPASS] {b_resp['status']} {v}\n")
+                    _auto_download(host_label, "dirbust", v, b_resp)
+                    return True
+        return True
+
+    return False
 
 
 def _dirbust(host, port, tls, base, log_handle, host_label, depth=1):
-    console.print(f"\n[bold secondary]▸ Directory Brute (advanced)[/bold secondary]")
+    console.print(f"\n[bold secondary]▸ Directory Brute (fast & active)[/bold secondary]")
     console.print(
         f"  [muted]Base path :[/muted] [text]{base}[/text]\n"
-        f"  [muted]Wordlist  :[/muted] [text]{len(DIR_PATHS)} paths[/text] "
-        f"[muted]x[/muted] [text]{len(BACKUP_EXTENSIONS)} backup ext = "
-        f"{len(DIR_PATHS) * (1 + len(BACKUP_EXTENSIONS))} probes[/text]\n"
-        f"  [muted]Bypass    :[/muted] [text]14 variants x 9 headers[/text]\n"
+        f"  [muted]Wordlist  :[/muted] [text]{len(DIR_PATHS)} core paths[/text]\n"
+        f"  [muted]Timeout   :[/muted] [text]3.5s per probe (no hanging)[/text]\n"
     )
 
     # 1. robots.txt
     robots_paths = _parse_robots(host, port, tls, base)
     all_paths = list(DIR_PATHS) + robots_paths
 
-    # 2. Add backup extensions for likely candidates
-    expanded = []
-    for p in all_paths:
-        if not p.endswith("/"):
-            expanded.append(p)
-            for ext in BACKUP_EXTENSIONS:
-                expanded.append(p + ext)
-        else:
-            expanded.append(p)
-
     found_dirs = []
-    for i, rel in enumerate(expanded, 1):
-        if i % 50 == 0:
-            console.print(f"  [muted]  … {i}/{len(expanded)}[/muted]")
+    total = len(all_paths)
+    for i, rel in enumerate(all_paths, 1):
+        if i % 10 == 0 or i == 1:
+            console.print(f"  [dim]... probing [{i}/{total}] {rel[:40]}[/dim]")
         ok = _try_path(host, port, tls, base, rel, log_handle, host_label)
         if ok and rel.endswith("/"):
             found_dirs.append(rel)
 
-    # 3. Recursion (optional, cheap)
+    # 2. Recursion on top discovered directories only
     if depth > 0 and found_dirs:
-        console.print(f"\n[bold secondary]▸ Recursing into {len(found_dirs)} dir(s)[/bold secondary]")
-        for d in found_dirs[:10]:   # cap recursion
+        console.print(f"\n[bold secondary]▸ Recursing into {len(found_dirs[:3])} discovered dir(s)[/bold secondary]")
+        for d in found_dirs[:3]:   # cap to top 3 to avoid infinite loops
             sub_base = base.rstrip("/") + "/" + d.lstrip("/")
-            _dirbust(host, port, tls, sub_base, log_handle, host_label,
-                     depth=depth - 1)
+            _dirbust(host, port, tls, sub_base, log_handle, host_label, depth=depth - 1)
 
 
 # ---------- entry point ----------
