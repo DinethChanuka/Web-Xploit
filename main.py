@@ -2,6 +2,7 @@ import os
 import signal
 import socket
 import ipaddress
+import sys
 
 from Design.colors_cli import console
 from Design.header import render_header
@@ -169,7 +170,7 @@ def _is_ip(s: str) -> bool:
         return False
 
 
-def main():
+def run_cli():
     setup_signals()
     os.system("cls" if os.name == "nt" else "clear")
     downloads = init_downloads()
@@ -313,5 +314,93 @@ def main():
             console.print(f"\n[error]ERROR: {error}[/error]")
 
 
+cli_main = run_cli
+
+
+# ---------------------------------------------------------------------------
+# Dual Mode Launcher (CLI / Web GUI)
+# ---------------------------------------------------------------------------
+
+BANNER = r"""
+ __      __   _     __  __    _  _  ___  _     ___  _____
+ \ \    / /__| |__  \ \/ /_ _| \| |/ _ \| |   |_ _|_   _|
+  \ \/\/ / -_) '_ \  >  <| || | .` | (_) | |__  | |  | |
+   \_/\_/\___|_.__/ /_/\_\\_,_|_|\_|\___/|____|___| |_|
+"""
+
+
+def _choose_mode() -> str:
+    print(BANNER)
+    print("   ADVANCED PENTESTING FRAMEWORK  v2.0\n")
+    print("   [1]  CLI      — terminal interface")
+    print("   [2]  Web GUI  — browser interface (red mode)")
+    print()
+    try:
+        choice = input("   > ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return ""
+    return choice
+
+
+def _setup_web_gui_package():
+    """Ensure web-gui directory can be imported as web_gui."""
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    web_gui_dir = os.path.join(base_dir, "web-gui")
+    if os.path.isdir(web_gui_dir) and "web_gui" not in sys.modules:
+        import types
+        pkg = types.ModuleType("web_gui")
+        pkg.__path__ = [web_gui_dir]
+        pkg.__file__ = os.path.join(web_gui_dir, "__init__.py")
+        sys.modules["web_gui"] = pkg
+
+
+def _launch_cli() -> int:
+    try:
+        run_cli()
+        return 0
+    except KeyboardInterrupt:
+        print("\n[!] Exited by user.")
+        return 0
+    except Exception as exc:
+        print(f"[!] CLI crashed: {exc}")
+        return 1
+
+
+def _launch_web() -> int:
+    _setup_web_gui_package()
+    try:
+        from web_gui.server import run_server
+    except ImportError as exc:
+        print(f"\n[!] Web GUI dependencies missing: {exc}")
+        print("    Install dependencies:  pip install flask\n")
+        return 1
+    try:
+        run_server()
+    except KeyboardInterrupt:
+        print("\n[server] shut down cleanly.")
+    return 0
+
+
+def main() -> int:
+    # Allow command line flags to skip mode selection
+    if len(sys.argv) > 1:
+        arg = sys.argv[1].lower()
+        if arg in ("--cli", "-c", "cli"):
+            return _launch_cli()
+        if arg in ("--web", "--gui", "-w", "-g", "web", "gui"):
+            return _launch_web()
+
+    mode = _choose_mode()
+    if mode == "1":
+        return _launch_cli()
+    if mode == "2":
+        return _launch_web()
+    if not mode:
+        return 0
+    print("[!] Invalid choice — expected 1 or 2\n")
+    return 1
+
+
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

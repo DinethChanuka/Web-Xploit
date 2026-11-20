@@ -76,7 +76,36 @@ def save_text(
     host: str = "unknown",
     subdir: str = "",
 ) -> str:
-    return save_bytes(text.encode("utf-8", "replace"), name, host, subdir)
+    import gzip
+    import zlib
+
+    # If bytes passed, decompress if needed or decode cleanly
+    if isinstance(text, bytes):
+        if text.startswith(b"\x1f\x8b"):
+            try:
+                text = gzip.decompress(text).decode("utf-8", "replace")
+            except Exception:
+                text = text.decode("utf-8", "replace")
+        else:
+            text = text.decode("utf-8", "replace")
+
+    # Sanitize string: ensure human-readable characters, preserve newlines and tabs
+    if not isinstance(text, str):
+        text = str(text)
+
+    # Clean out non-printable binary control characters (except \n, \r, \t)
+    cleaned_chars = []
+    for ch in text:
+        code = ord(ch)
+        if code in (10, 13, 9) or (32 <= code <= 126) or code >= 160:
+            cleaned_chars.append(ch)
+        elif code == 0:
+            continue
+        else:
+            cleaned_chars.append(" ")
+    cleaned_text = "".join(cleaned_chars)
+
+    return save_bytes(cleaned_text.encode("utf-8", "replace"), name, host, subdir)
 
 
 def save_discovered(text_content: str, host: str, label: str) -> str:

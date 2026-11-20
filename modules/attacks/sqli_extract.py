@@ -144,8 +144,18 @@ def run_web_sqli_extract(target, config):
                 req_log("GET", f"…?{param}= [{label} dump]")
                 resp = _req(h, p_port, tls, _param_url(path, param, probe))
                 if resp and resp["size"] > 0:
-                    save_text(resp["body"].decode("utf-8", "replace")[:200000],
-                              f"sqli_dump_{param}_{label}.txt", host=h, subdir="sqli")
+                    body_text = resp["body"].decode("utf-8", "replace") if isinstance(resp["body"], bytes) else str(resp["body"])
+                    content = (
+                        f"=== SQLI {label.upper()} DUMP ===\n"
+                        f"Target: {h}:{p_port}\n"
+                        f"Parameter: {param}\n"
+                        f"Probe: {probe}\n"
+                        f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+                        f"Response Size: {resp['size']} bytes\n"
+                        f"----------------------------------------\n\n"
+                        f"{body_text[:200000]}\n"
+                    )
+                    save_text(content, f"sqli_dump_{param}_{label}.txt", host=h, subdir="sqli")
                     console.print(f"  [muted]{label} dump saved ({resp['size']}b)[/muted]")
 
         # Phase 3: Time-based blind

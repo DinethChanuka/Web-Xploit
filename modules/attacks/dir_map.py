@@ -1,7 +1,8 @@
 """
 Server Directory Mapping Module
 Performs deep directory and file enumeration to map the web server's site structure.
-Uses multithreaded probing with hard per-request timeouts so it never hangs.
+Uses multithreaded probing with hard per-request timeouts, protocol auto-negotiation,
+realistic browser headers, and wildcard false-positive filtering.
 Outputs a structured site directory map and saves it to downloads/<host>/.
 """
 import concurrent.futures
@@ -25,36 +26,14 @@ from modules.attack_config import AttackConfig
 from modules.downloads import host_dir, ensure_dir, save_text
 
 
-DEFAULT_DIR_WORDS = [
-    # Top administrative panels
-    "admin", "admin/", "admin/login", "admin/login.php", "admin/index.php",
-    "administrator", "administrator/", "adminpanel", "cpanel", "controlpanel",
-    "login", "login.php", "signin", "auth", "user/login", "wp-login.php",
-    "wp-admin/", "phpmyadmin/", "pma/", "adminer.php", "manager/html",
-    # Backups, dumps & archives
-    "backup", "backup/", "backups/", "backup.zip", "backup.tar.gz", "backup.sql",
-    "db.sql", "db_backup.sql", "dump.sql", "database.sql", "site.zip", "www.zip",
-    "web.zip", "old/", "temp/", "tmp/", "export.sql",
-    # Configs & credentials
-    ".env", ".env.local", ".env.production", ".env.bak", ".git/HEAD", ".git/config",
-    ".svn/entries", ".htaccess", ".htpasswd", "web.config", "config.php",
-    "config.inc.php", "wp-config.php", "wp-config.php.bak", "configuration.php",
-    "settings.py", "database.yml", "secrets.json", "credentials.json",
-    # Sensitive information & logs
-    "info.php", "phpinfo.php", "test.php", "error.log", "access.log", "debug.log",
-    "server-status", "server-info", "actuator", "actuator/env", "actuator/health",
-    # APIs & Web Services
-    "api", "api/", "api/v1/", "api/v2/", "api/v3/", "api/docs", "swagger",
-    "swagger/", "swagger.json", "swagger-ui/", "openapi.json", "graphql", "graphiql",
-    # Public & asset directories
-    "robots.txt", "sitemap.xml", "security.txt", ".well-known/security.txt",
-    "uploads/", "upload/", "files/", "images/", "img/", "static/", "assets/",
-    "css/", "js/", "media/", "download/", "downloads/", "includes/",
-    # Application & source files
-    "app/", "core/", "src/", "vendor/", "node_modules/", "portal/", "dashboard/",
-    "register", "signup", "forgot-password", "profile", "account", "search",
-    "index.php", "index.html", "home", "default.aspx", "main",
-]
+BROWSER_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate",
+    "Connection": "close",
+    "Upgrade-Insecure-Requests": "1",
+}
 
 
 def _make_conn(host: str, port: int, tls: bool, timeout: float = 3.5):
@@ -66,32 +45,68 @@ def _make_conn(host: str, port: int, tls: bool, timeout: float = 3.5):
     return http.client.HTTPConnection(host, port, timeout=timeout)
 
 
+def _extract_title(html: str) -> str:
+    if not html:
+        return ""
+    m = re.search(r"<title[^>]*>(.*?)</title>", html, re.IGNORECASE | re.DOTALL)
+    if m:
+        return re.sub(r"\s+", " ", m.group(1)).strip()[:50]
+    return ""
+
+
 def _probe_single(host: str, port: int, tls: bool, path: str, timeout: float = 3.5) -> dict | None:
-    """Send a single GET request with a strict timeout. Never hangs."""
+    """Send a single GET request with realistic browser headers and strict timeout."""
     conn = None
     try:
         conn = _make_conn(host, port, tls, timeout=timeout)
-        headers = {
-            "User-Agent": "Mozilla/5.0 (compatible; SecurityAudit/DirectoryMapper)",
-            "Accept": "*/*",
-            "Connection": "close",
-        }
+        headers = dict(BROWSER_HEADERS)
+        headers["Host"] = host
         conn.request("GET", path, headers=headers)
         resp = conn.getresponse()
-        data = resp.read(8192)  # Read up to 8KB
+        data = resp.read(8192)
         status = resp.status
-        content_type = resp.getheader("Content-Type", "")
+        content_type = resp.getheader("Content-Type", "").split(";")[0].strip()
         location = resp.getheader("Location", "")
         length = len(data)
         cl = resp.getheader("Content-Length")
         if cl and cl.isdigit():
             length = int(cl)
+
+        title = ""
+        if "text/html" in content_type:
+            try:
+                title = _extract_title(data.decode("utf-8", "ignore"))
+            except Exception:
+                pass
+
+        # Follow trailing-slash redirect on same host
+        if status in (301, 302, 307, 308) and location:
+            if location.endswith(f"{path}/") or (location.startswith("/") and location == f"{path}/"):
+                try:
+                    conn2 = _make_conn(host, port, tls, timeout=timeout)
+                    dest_path = f"{path}/"
+                    conn2.request("GET", dest_path, headers=headers)
+                    resp2 = conn2.getresponse()
+                    if resp2.status in (200, 206, 401, 403):
+                        data2 = resp2.read(8192)
+                        status = resp2.status
+                        length = len(data2)
+                        cl2 = resp2.getheader("Content-Length")
+                        if cl2 and cl2.isdigit():
+                            length = int(cl2)
+                        title = _extract_title(data2.decode("utf-8", "ignore"))
+                        location = f"-> {dest_path}"
+                    conn2.close()
+                except Exception:
+                    pass
+
         return {
             "path": path,
             "status": status,
             "length": length,
             "content_type": content_type,
             "location": location,
+            "title": title,
         }
     except Exception:
         return None
@@ -104,8 +119,20 @@ def _probe_single(host: str, port: int, tls: bool, path: str, timeout: float = 3
 
 
 def run(target: TargetInfo, config: AttackConfig) -> None:
-    tls = target.service.lower() == "https"
+    tls = target.service.lower() == "https" or target.port in (443, 8443)
     base_path = (config.http_path or "/").rstrip("/")
+
+    # Detect HTTP -> HTTPS redirect on port 80
+    if not tls and target.port == 80:
+        root_probe = _probe_single(target.host, target.port, False, "/", timeout=3.5)
+        if root_probe and root_probe.get("status") in (301, 302, 307, 308):
+            loc = root_probe.get("location", "")
+            if loc.startswith("https://"):
+                console.print(f"  [cyan]ℹ Detected HTTP -> HTTPS upgrade on port 80. Probing HTTPS 443 for true status codes.[/cyan]")
+                tls = True
+                target.port = 443
+                target.service = "https"
+
     console.print(
         f"\n[bold primary]━━━ SERVER DIRECTORY MAPPING ━━━[/bold primary]\n"
         f"  [muted]Target    :[/muted] [primary]{target.service.upper()} {target.host}:{target.port}[/primary]\n"
@@ -113,18 +140,34 @@ def run(target: TargetInfo, config: AttackConfig) -> None:
         f"  [muted]Threads   :[/muted] [text]15 worker threads with 3.5s watchdog[/text]\n"
     )
 
-    # 1. Prepare wordlist
-    words = list(DEFAULT_DIR_WORDS)
-    wordlist_file = getattr(config, "password_file", None)
-    if wordlist_file and os.path.isfile(wordlist_file):
+    # 1. Prepare wordlist (ensure minimum 1000 entries)
+    words = []
+    if config.password_file and os.path.isfile(config.password_file):
         try:
-            with open(wordlist_file, "r", encoding="utf-8", errors="ignore") as fh:
-                custom = [line.strip() for line in fh if line.strip() and not line.startswith("#")]
-                if custom:
-                    words = custom
-                    console.print(f"  [muted]Loaded wordlist:[/muted] [text]{wordlist_file}[/text] ({len(words)} entries)")
-        except Exception as e:
-            console.print(f"  [warning]Could not read custom wordlist: {e}[/warning]")
+            with open(config.password_file, "r", encoding="utf-8", errors="ignore") as fh:
+                words = [line.strip() for line in fh if line.strip() and not line.startswith("#")]
+        except Exception:
+            pass
+
+    if not words or len(words) < 50:
+        wl_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "wordlists")
+        for cand in ("directories.txt", "directories_large.txt"):
+            p = os.path.join(wl_dir, cand)
+            if os.path.isfile(p):
+                try:
+                    with open(p, "r", encoding="utf-8", errors="ignore") as fh:
+                        words = [line.strip() for line in fh if line.strip() and not line.startswith("#")]
+                        if words:
+                            break
+                except Exception:
+                    pass
+
+    # Canary test for wildcard 403 / 404
+    wildcard_403_len = None
+    canary = _probe_single(target.host, target.port, tls, "/_canary_not_found_test_99_", timeout=3.5)
+    if canary and canary["status"] == 403:
+        wildcard_403_len = canary["length"]
+        console.print(f"  [yellow]⚠ Note: Server returns generic 403 on non-existent paths ({wildcard_403_len}B). Filtering false positives.[/yellow]")
 
     # Normalize paths
     paths_to_test = []
@@ -150,7 +193,7 @@ def run(target: TargetInfo, config: AttackConfig) -> None:
             return None
         return _probe_single(target.host, target.port, tls, path, timeout=3.5)
 
-    console.print("[dim]Starting directory mapping probe... (Press Ctrl+C to stop and show findings)[/dim]\n")
+    console.print("[dim]Starting directory mapping probe... (Press Ctrl+C to stop and generate report)[/dim]\n")
 
     try:
         with concurrent.futures.ThreadPoolExecutor(max_workers=15) as executor:
@@ -161,10 +204,17 @@ def run(target: TargetInfo, config: AttackConfig) -> None:
                     res = future.result()
                     if res:
                         st = res["status"]
+                        # Drop 404s and wildcard 403s
+                        if st == 404:
+                            continue
+                        if st == 403 and wildcard_403_len is not None and abs(res["length"] - wildcard_403_len) < 5:
+                            continue
+
                         # Filter interesting statuses
                         if st in (200, 201, 204, 206, 301, 302, 307, 308, 401, 403, 500):
                             discovered.append(res)
                             loc_info = f" → {res['location']}" if res.get("location") else ""
+                            title_info = f" [{res['title']}]" if res.get("title") else ""
                             if st in (200, 206):
                                 st_str = f"[bold success]{st}[/bold success]"
                             elif st in (301, 302, 307, 308):
@@ -176,7 +226,7 @@ def run(target: TargetInfo, config: AttackConfig) -> None:
                             console.print(
                                 f"  [{completed}/{total}] {st_str} "
                                 f"[text]{res['path']}[/text] "
-                                f"[muted]({res['length']}b){loc_info}[/muted]"
+                                f"[muted]({res['length']}b){loc_info}{title_info}[/muted]"
                             )
                 except Exception:
                     pass
@@ -184,15 +234,15 @@ def run(target: TargetInfo, config: AttackConfig) -> None:
         stop_event.set()
         console.print("\n[warning]  Mapping paused by user. Generating report for discovered paths...[/warning]\n")
 
-    # Sort results
-    discovered.sort(key=lambda x: (0 if x["status"] == 200 else 1, x["path"]))
+    # Sort results: 200s first, then redirects, then others
+    discovered.sort(key=lambda x: (0 if x["status"] == 200 else (1 if str(x["status"]).startswith("3") else 2), x["path"]))
 
     # Render results table
     table = Table(title=f"Site Directory Map — {target.host}:{target.port}", show_lines=True)
     table.add_column("Status", style="bold", width=8)
-    table.add_column("Path", style="text", width=38)
+    table.add_column("Path", style="text", width=34)
     table.add_column("Size", style="muted", width=10)
-    table.add_column("Details", style="primary")
+    table.add_column("Details & Title", style="primary")
 
     for item in discovered:
         st = item["status"]
@@ -205,7 +255,7 @@ def run(target: TargetInfo, config: AttackConfig) -> None:
         else:
             s_color = "red"
 
-        details = item.get("location") or item.get("content_type", "")[:40]
+        details = item.get("title") or item.get("location") or item.get("content_type", "")[:40]
         table.add_row(
             f"[{s_color}]{st}[/{s_color}]",
             item["path"],
@@ -216,7 +266,7 @@ def run(target: TargetInfo, config: AttackConfig) -> None:
     console.print()
     if discovered:
         console.print(table)
-        console.print(f"\n[bold success]✓ Directory mapping complete: {len(discovered)} endpoints discovered.[/bold success]")
+        console.print(f"\n[bold success]✓ Directory mapping complete: {len(discovered)} active endpoint(s) mapped.[/bold success]")
     else:
         console.print(f"  [muted]No accessible endpoints discovered out of {completed} probed paths.[/muted]")
 
@@ -231,7 +281,8 @@ def run(target: TargetInfo, config: AttackConfig) -> None:
             fh.write("=" * 70 + "\n\n")
             for item in discovered:
                 loc = f" -> {item['location']}" if item.get("location") else ""
-                fh.write(f"[{item['status']}] {item['path']} ({item['length']} bytes){loc}\n")
+                t_str = f" [{item['title']}]" if item.get("title") else ""
+                fh.write(f"[{item['status']}] {item['path']} ({item['length']} bytes){loc}{t_str}\n")
         console.print(f"  [muted]Text map saved to:[/muted] [text]{report_file}[/text]")
 
         with open(json_file, "w", encoding="utf-8") as fh:
